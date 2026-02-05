@@ -5,6 +5,7 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { validateSingleArmData, validateComparativeData } from './extractionValidation.js';
 
 const execAsync = promisify(exec);
 const __filename = fileURLToPath(import.meta.url);
@@ -253,18 +254,18 @@ Extract data in this EXACT format with ALL 23 single-arm fields and ALL 22 compa
   "singleArmData": [
     {
       "study": "Study name from document",
-      "treatment": "Treatment arm name",
-      "measureName": "Outcome measure name (e.g., 'all-cause mortality', '6-minute walk test', 'KCCQ-OS score')",
-      "timePoint": "Time point as stated in document (e.g., '12 weeks', 'Week 24', '30 months', 'Month 18', 'Year 2', 'End of study')",
-      "n": <sample size as number>,
-      "event": <number of events if dichotomous, or null>,
+      "treatment": "Treatment arm name (e.g., 'Resmetirom 80mg', 'Placebo', 'Semaglutide 2.4mg')",
+      "measureName": "Outcome measure name (e.g., 'MASH resolution', 'Diarrhea', '6MWD change')",
+      "timePoint": "Time point as stated in document (e.g., '52 weeks', 'Week 72', 'End of study')",
+      "n": <sample size as number - REQUIRED>,
+      "event": <number of events if dichotomous (e.g., 65 if 65 events occurred), or null>,
       "time": <follow-up time if time-to-event, or null>,
-      "mean": <mean value if continuous, or null>,
+      "mean": <mean value or mean change from baseline if continuous, or null>,
       "sd": <standard deviation if continuous, or null>,
-      "te": <treatment effect if available, or null>,
-      "seTE": <standard error of TE if available, or null>,
-      "notes": "Additional notes",
-      "calculationNotes": "Details of any calculations performed (e.g., SD calculated from SE)",
+      "te": <TREATMENT EFFECT - CRITICAL: For binary=log(events/(n-events)), For continuous=mean change value. ALWAYS CALCULATE THIS!>,
+      "seTE": <standard error: For binary=sqrt(1/events + 1/(n-events)), For continuous=SD/sqrt(n). ALWAYS CALCULATE THIS!>,
+      "notes": "Brief description only - DO NOT put numbers here that should be in fields above",
+      "calculationNotes": "Show your calculations: e.g., 'te=log(65/370)=-1.74, seTE=sqrt(1/65+1/370)=0.14' or 'te=-30.5 (mean change), seTE=95.2/sqrt(409)=4.71'",
       "condition": "${projectPICOTS.conditionName || 'Extract from document'}",
       "age": "Age criteria (e.g., 'adults', '18-90 years')",
       "severity": "Disease severity criteria",
@@ -289,10 +290,12 @@ Extract data in this EXACT format with ALL 23 single-arm fields and ALL 22 compa
       "timePoint": "Time point",
       "n1": <sample size treatment 1>,
       "n2": <sample size treatment 2>,
-      "te": <treatment effect - log(HR/OR/RR) for ratios, raw difference for continuous>,
-      "seTE": <standard error calculated from 95% CI>,
+      "event1": <event count treatment 1 for binary outcomes - REQUIRED for binary data>,
+      "event2": <event count treatment 2 for binary outcomes - REQUIRED for binary data>,
+      "te": <REQUIRED: log OR for binary, log HR if reported, mean difference for continuous>,
+      "seTE": <REQUIRED: standard error - for binary: sqrt(1/e1+1/(n1-e1)+1/e2+1/(n2-e2))>,
       "notes": "Source data: HR 0.69 (95% CI 0.49-0.98), p=0.04",
-      "calculationNotes": "te=log(0.69)=-0.371, seTE=(log(0.98)-log(0.49))/3.92=0.172",
+      "calculationNotes": "Binary: te=log((e1/(n1-e1))/(e2/(n2-e2))), seTE=sqrt(1/e1+1/(n1-e1)+1/e2+1/(n2-e2)). HR: te=log(0.69)=-0.371, seTE=(log(0.98)-log(0.49))/3.92=0.172",
       "condition": "${projectPICOTS.conditionName || 'Extract from document'}",
       "age": "Age criteria",
       "severity": "Disease severity",
@@ -353,29 +356,29 @@ Extract data in this EXACT format with ALL 23 single-arm fields and ALL 22 compa
 3. **EXTRACT EVERY TIMEPOINT**: If paper reports outcomes at Week 12, Month 6, Month 12, Month 30 - extract ALL of them, create separate records for each
 
 4. **REQUIRED FIELDS - NEVER NULL**:
-   - **Single-arm data**: study, treatment, measureName, timePoint, n are REQUIRED
-   - **Comparative data**: study, treatment1, treatment2, measureName, timePoint, n1, n2 are REQUIRED
-   - CRITICAL: n1 and n2 MUST be extracted for every comparative data record - look in the text/tables for "n=XXX" or sample size information
-   - If sample size truly not reported in document, set n1/n2 to the total randomized numbers and explain in notes: "Sample size for this outcome not reported, using total randomized"
-   - If truly missing and cannot infer, explain in notes
+   - **Single-arm data**: study, treatment, measureName, timePoint, n, AND (te + seTE) are REQUIRED
+   - **Comparative data**: study, treatment1, treatment2, measureName, timePoint, n1, n2, te, seTE are REQUIRED
+   - CRITICAL: ALWAYS calculate and populate te and seTE - these are the most important fields for meta-analysis!
+   - If sample size truly not reported in document, set n to the total randomized numbers and explain in notes
 
-5. **DICHOTOMOUS OUTCOMES - Single Arm**:
-   - Format: "Deaths: Acoramidis 12/409, Placebo 18/202" or "Acoramidis: 12 events (2.9%), Placebo: 18 events (8.9%)"
-   - Extract 2 single-arm records:
-     * Record 1: study=..., treatment="Acoramidis", measureName="Death", timePoint=..., n=409, event=12
-     * Record 2: study=..., treatment="Placebo", measureName="Death", timePoint=..., n=202, event=18
-   - DO NOT put this in notes - put in n and event fields!
-   - CRITICAL: When you see "X events in treatment A, Y events in treatment B" this is SINGLE-ARM data, not comparative!
+5. **DICHOTOMOUS OUTCOMES - Single Arm** - MUST CALCULATE TE:
+   - Format: "Deaths: Acoramidis 12/409, Placebo 18/202" or "Diarrhea: Resmetirom 15% (65/435), Placebo 33% (88/266)"
+   - Extract 2 single-arm records WITH calculated TE:
+     * Record 1: treatment="Resmetirom", n=435, event=65, te=log(65/370)=-1.74, seTE=sqrt(1/65+1/370)=0.14
+     * Record 2: treatment="Placebo", n=266, event=88, te=log(88/178)=-0.70, seTE=sqrt(1/88+1/178)=0.14
+   - FORMULA: te = log(events / (n - events)), seTE = sqrt(1/events + 1/(n-events))
+   - DO NOT put percentages or event counts in notes - calculate te and seTE!
+   - CRITICAL: When you see "X% in treatment A, Y% in treatment B" calculate the events AND the log-odds for te!
 
-6. **CONTINUOUS OUTCOMES - Single Arm**:
+6. **CONTINUOUS OUTCOMES - Single Arm** - MUST CALCULATE TE:
    - Format: "Change in 6MWD: Acoramidis -30.5±95.2m (n=409), Placebo -48.3±102.1m (n=202)"
-   - Extract 2 single-arm records:
-     * Record 1: treatment="Acoramidis", n=409, mean=-30.5, sd=95.2
-     * Record 2: treatment="Placebo", n=202, mean=-48.3, sd=102.1
-   - If only SE given: Calculate sd = SE × √n, document in calculationNotes
-   - If only 95% CI given: Calculate SE = (upper - lower)/(2×1.96), then sd = SE × √n
-   - If data only shown graphically (no numerical values in text/tables): Leave mean/sd as null, explain in notes: "Data shown graphically only, numerical values not reported in text"
-   - DO NOT put this in notes - put in mean/sd fields!
+   - Extract 2 single-arm records WITH TE = mean change:
+     * Record 1: treatment="Acoramidis", n=409, mean=-30.5, sd=95.2, te=-30.5, seTE=95.2/sqrt(409)=4.71
+     * Record 2: treatment="Placebo", n=202, mean=-48.3, sd=102.1, te=-48.3, seTE=102.1/sqrt(202)=7.18
+   - FORMULA: te = mean change, seTE = SD / sqrt(n)
+   - If only SE given: sd = SE × √n, te = mean, seTE = SE
+   - If only 95% CI given: SE = (upper - lower)/(2×1.96), then seTE = SE
+   - CRITICAL: The mean change IS the treatment effect (te) for single-arm continuous data!
 
 6a. **LOOK FOR SUPPLEMENTARY TABLES**: Many papers report detailed numerical data in supplementary appendices or online-only tables. Check tables in the document for exact numbers even if main text only references figures.
 
@@ -602,14 +605,55 @@ Extract all relevant clinical trial data from this section. Use the structured t
     
     console.log(`\n═══════════════════════════════════════════════════\n`);
 
+    // Validate and auto-enhance the extracted data
+    console.log('🔍 Running automatic validation and enhancement...');
+    const singleArmValidation = validateSingleArmData(singleArmData);
+    const comparativeValidation = validateComparativeData(comparativeData);
+    
+    // Log enhancements made
+    if (singleArmValidation.enhancements.length > 0) {
+      console.log(`✨ Auto-calculated ${singleArmValidation.enhancements.length} missing values in single-arm data:`);
+      singleArmValidation.enhancements.forEach(enh => {
+        console.log(`   Row ${enh.row}: ${enh.field} = ${enh.newValue} (${enh.calculation})`);
+      });
+    }
+    
+    // Combine all warnings
+    const combinedWarnings = [
+      ...allWarnings,
+      ...singleArmValidation.warnings.map(w => `Single-arm: ${w}`),
+      ...comparativeValidation.warnings.map(w => `Comparative: ${w}`)
+    ];
+    
+    // Log validation results
+    console.log(`📊 Validation Summary:`);
+    console.log(`   Single-arm completeness: ${singleArmValidation.completenessScore}%`);
+    console.log(`   Comparative completeness: ${comparativeValidation.completenessScore}%`);
+    console.log(`   Total warnings: ${combinedWarnings.length}`);
+    console.log(`   Total errors: ${singleArmValidation.errors.length + comparativeValidation.errors.length}`);
+
     return {
-      singleArmData,
-      comparativeData,
+      singleArmData: singleArmValidation.data, // Use enhanced data with auto-calculated values
+      comparativeData: comparativeValidation.data,
       aiConfidence: {
         overall: 0.85,
         notes: `Extracted from ${chunks.length} document section(s)`,
       },
-      warnings: allWarnings,
+      warnings: combinedWarnings,
+      validation: {
+        singleArm: {
+          completeness: singleArmValidation.completenessScore,
+          warnings: singleArmValidation.warnings,
+          errors: singleArmValidation.errors,
+          enhancements: singleArmValidation.enhancements
+        },
+        comparative: {
+          completeness: comparativeValidation.completenessScore,
+          warnings: comparativeValidation.warnings,
+          errors: comparativeValidation.errors,
+          enhancements: comparativeValidation.enhancements
+        }
+      }
     };
 
   } catch (error) {

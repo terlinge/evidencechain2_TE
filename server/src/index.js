@@ -11,6 +11,7 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import FileDB from './db/fileDB.js';
 import { extractClinicalData, extractMetadata } from './services/aiExtractionService.js';
+import { refineExtraction } from './services/extractionValidation.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -308,10 +309,14 @@ app.get('/api/projects/:projectId/extractions/:extractionId/ai-results', (req, r
 });
 
 app.patch('/api/projects/:projectId/extractions/:extractionId', (req, res) => {
+  // Get existing extraction to preserve status if already completed
+  const existing = extractionsDB.findById(req.params.extractionId);
+  const newStatus = existing?.status === 'processing' ? 'completed' : (existing?.status || 'reviewed');
+  
   const extraction = extractionsDB.update(req.params.extractionId, {
     singleArmData: req.body.singleArmData,
     comparativeData: req.body.comparativeData,
-    status: 'reviewed',
+    status: newStatus,
   });
   
   if (!extraction) {
@@ -344,6 +349,60 @@ app.post('/api/projects/:projectId/extractions/:extractionId/submit', (req, res)
   }
   
   res.json({ message: 'Extraction submitted successfully', extraction });
+});
+
+// Refine/validate extraction data
+app.post('/api/projects/:projectId/extractions/:extractionId/refine', (req, res) => {
+  console.log('🔍 Refining extraction:', req.params.extractionId);
+  
+  const extraction = extractionsDB.findById(req.params.extractionId);
+  
+  if (!extraction) {
+    return res.status(404).json({ error: 'Extraction not found' });
+  }
+  
+  try {
+    // Run validation and auto-calculation
+    const refinementResult = refineExtraction({
+      id: extraction.id,
+      singleArmData: extraction.singleArmData || [],
+      comparativeData: extraction.comparativeData || []
+    });
+    
+    console.log('✅ Refinement complete:', {
+      singleArmEnhancements: refinementResult.singleArm.changes.length,
+      comparativeEnhancements: refinementResult.comparative.changes.length,
+      overallCompleteness: refinementResult.overallCompleteness
+    });
+    
+    // Update extraction with refined data (if auto-apply is requested)
+    if (req.body.autoApply) {
+      extractionsDB.update(req.params.extractionId, {
+        singleArmData: refinementResult.singleArm.refinedData,
+        comparativeData: refinementResult.comparative.refinedData,
+        validationStatus: {
+          completeness: refinementResult.overallCompleteness,
+          warnings: [
+            ...refinementResult.singleArm.warnings,
+            ...refinementResult.comparative.warnings
+          ],
+          errors: [
+            ...refinementResult.singleArm.errors,
+            ...refinementResult.comparative.errors
+          ],
+          lastValidated: new Date().toISOString()
+        }
+      });
+    }
+    
+    res.json(refinementResult);
+  } catch (error) {
+    console.error('❌ Refinement error:', error);
+    res.status(500).json({ 
+      error: 'Refinement failed', 
+      message: error.message 
+    });
+  }
 });
 
 // Basic route

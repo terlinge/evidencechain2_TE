@@ -31,6 +31,8 @@ export default function ExpandedComparativeTable({ data, onUpdate }: ExpandedCom
           <Th>Time Point</Th>
           <Th>n1 *</Th>
           <Th>n2 *</Th>
+          <Th>Event1</Th>
+          <Th>Event2</Th>
           <Th>TE *</Th>
           <Th>seTE *</Th>
           <Th>Page</Th>
@@ -110,6 +112,26 @@ export default function ExpandedComparativeTable({ data, onUpdate }: ExpandedCom
                 value={row.n2}
                 onChange={(e) => onUpdate(index, 'n2', parseInt(e.target.value) || 0)}
                 borderColor={!row.n2 || row.n2 <= 0 ? 'red.300' : undefined}
+                w="80px"
+              />
+            </Td>
+            <Td>
+              <Input
+                type="number"
+                size="sm"
+                value={row.event1 ?? ''}
+                onChange={(e) => onUpdate(index, 'event1', e.target.value ? parseInt(e.target.value) : undefined)}
+                placeholder="-"
+                w="80px"
+              />
+            </Td>
+            <Td>
+              <Input
+                type="number"
+                size="sm"
+                value={row.event2 ?? ''}
+                onChange={(e) => onUpdate(index, 'event2', e.target.value ? parseInt(e.target.value) : undefined)}
+                placeholder="-"
                 w="80px"
               />
             </Td>

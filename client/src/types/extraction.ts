@@ -54,6 +54,10 @@ export interface ComparativeExtraction {
   n1: number;
   n2: number;
   
+  // Event counts for binary outcomes (enables log OR calculation)
+  event1?: number;
+  event2?: number;
+  
   // Effect estimates
   te: number;
   seTE: number;
@@ -145,6 +149,8 @@ export function getEmptyComparativeExtraction(): ComparativeExtraction {
     timePoint: '',
     n1: 0,
     n2: 0,
+    event1: undefined,
+    event2: undefined,
     te: 0,
     seTE: 0,
     page: '',

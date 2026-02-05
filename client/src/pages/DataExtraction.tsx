@@ -22,8 +22,9 @@ import {
   AlertTitle,
   AlertDescription,
 } from '@chakra-ui/react';
-import { ArrowBackIcon, CheckCircleIcon, DownloadIcon, WarningIcon, AttachmentIcon } from '@chakra-ui/icons';
+import { ArrowBackIcon, CheckCircleIcon, DownloadIcon, WarningIcon, AttachmentIcon, RepeatIcon } from '@chakra-ui/icons';
 import { uploadAndExtract, getExtractionResults, updateExtraction, submitExtraction } from '../api/aiExtraction';
+import { refineExtraction } from '../api/extractions';
 import { AIExtractionResult, SingleArmExtraction, ComparativeExtraction } from '../types/extraction';
 import { exportSingleArmToCSV, exportComparativeToCSV } from '../utils/exportCSV';
 import { validateSingleArmData, validateComparativeData, QAReport } from '../utils/qaValidation';
@@ -41,6 +42,43 @@ export default function DataExtraction() {
   const [extraction, setExtraction] = useState<AIExtractionResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [qaReport, setQaReport] = useState<{ singleArm?: QAReport; comparative?: QAReport } | null>(null);
+  const [refining, setRefining] = useState(false);
+
+  // Handle extraction refinement
+  const handleRefineExtraction = async () => {
+    if (!extraction || !projectId || !extractionId) return;
+    
+    setRefining(true);
+    try {
+      const refinementResult = await refineExtraction(projectId, extractionId, true); // autoApply = true
+      
+      toast({
+        title: 'Refinement complete!',
+        description: `Enhanced ${refinementResult.singleArm.changes.length + refinementResult.comparative.changes.length} records`,
+        status: 'success',
+        duration: 5000,
+      });
+      
+      // Reload the extraction to get updated data
+      const updatedExtraction = await getExtractionResults(projectId, extractionId);
+      setExtraction(updatedExtraction);
+      
+      // Re-run QA validation
+      const singleArmQA = validateSingleArmData(updatedExtraction.singleArmData);
+      const comparativeQA = validateComparativeData(updatedExtraction.comparativeData);
+      setQaReport({ singleArm: singleArmQA, comparative: comparativeQA });
+    } catch (error) {
+      console.error('Refinement error:', error);
+      toast({
+        title: 'Refinement failed',
+        description: error instanceof Error ? error.message : 'Failed to refine extraction',
+        status: 'error',
+        duration: 5000,
+      });
+    } finally {
+      setRefining(false);
+    }
+  };
 
   // Polling function that can be called from anywhere
   const startPolling = async (extractionId: string) => {
@@ -463,7 +501,7 @@ export default function DataExtraction() {
           </Card>
         )}
 
-        {extraction && extraction.status === 'completed' && (
+        {extraction && (extraction.status === 'completed' || extraction.status === 'reviewed') && (
           <>
             {extraction.warnings.length > 0 && (
               <Alert status="warning">
@@ -515,9 +553,21 @@ export default function DataExtraction() {
               <Card w="full">
                 <CardBody>
                   <VStack align="start" spacing={3}>
-                    <HStack>
-                      <WarningIcon color="blue.500" />
-                      <Text fontWeight="semibold">Quality Assurance Report</Text>
+                    <HStack justify="space-between" w="full">
+                      <HStack>
+                        <WarningIcon color="blue.500" />
+                        <Text fontWeight="semibold">Quality Assurance Report</Text>
+                      </HStack>
+                      <Button
+                        size="sm"
+                        leftIcon={<RepeatIcon />}
+                        colorScheme="purple"
+                        onClick={handleRefineExtraction}
+                        isLoading={refining}
+                        loadingText="Refining..."
+                      >
+                        Auto-Fix Issues
+                      </Button>
                     </HStack>
                     
                     {/* Single-Arm QA */}
