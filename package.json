@@ -1,0 +1,18 @@
+{
+  "name": "evidencechain",
+  "version": "1.0.0",
+  "description": "AI-powered systematic review platform for clinical trial data extraction",
+  "scripts": {
+    "dev": "concurrently \"npm run dev --prefix client\" \"npm run dev --prefix server\"",
+    "install:all": "npm install && npm install --prefix client && npm install --prefix server",
+    "build": "npm run build --prefix client && npm run build --prefix server",
+    "start": "npm start --prefix server",
+    "test": "npm test --prefix client && npm test --prefix server"
+  },
+  "keywords": ["systematic-review", "clinical-trials", "network-meta-analysis"],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}
