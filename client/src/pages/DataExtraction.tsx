@@ -38,10 +38,67 @@ export default function DataExtraction() {
 
   const [uploading, setUploading] = useState(false);
   const [processing, setProcessing] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState(0);
   const [extraction, setExtraction] = useState<AIExtractionResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [qaReport, setQaReport] = useState<{ singleArm?: QAReport; comparative?: QAReport } | null>(null);
+
+  // Polling function that can be called from anywhere
+  const startPolling = async (extractionId: string) => {
+    let attempts = 0;
+    const maxAttempts = 120; // 120 seconds max for large documents
+    
+    const pollResults = async (): Promise<void> => {
+      try {
+        console.log(`🔍 Polling for results (attempt ${attempts + 1}/${maxAttempts})...`);
+        const results = await getExtractionResults(projectId!, extractionId);
+        
+        console.log('📊 Extraction status:', results.status);
+        console.log('📊 Single-arm count:', results.singleArmData?.length || 0);
+        console.log('📊 Comparative count:', results.comparativeData?.length || 0);
+        
+        if (results.status === 'completed') {
+          console.log('✅ Extraction completed! Setting state...');
+          setExtraction(results);
+          setProcessing(false);
+          
+          // Run QA validation
+          const singleArmQA = validateSingleArmData(results.singleArmData);
+          const comparativeQA = validateComparativeData(results.comparativeData);
+          setQaReport({ singleArm: singleArmQA, comparative: comparativeQA });
+          
+          toast({
+            title: 'Extraction complete!',
+            description: `Found ${results.singleArmData.length} single-arm and ${results.comparativeData.length} comparative outcomes`,
+            status: 'success',
+            duration: 5000,
+          });
+          
+          console.log('✅ State updated - extraction:', extraction);
+          console.log('✅ Processing flag:', processing);
+        } else if (results.status === 'error') {
+          throw new Error('Extraction failed on server');
+        } else {
+          attempts++;
+          if (attempts < maxAttempts) {
+            setTimeout(pollResults, 1000);
+          } else {
+            throw new Error('Extraction timeout - please refresh and check results');
+          }
+        }
+      } catch (error) {
+        console.error('Error polling results:', error);
+        setProcessing(false);
+        toast({
+          title: 'Polling error',
+          description: error instanceof Error ? error.message : 'Failed to check extraction status',
+          status: 'error',
+          duration: 5000,
+        });
+      }
+    };
+    
+    await pollResults();
+  };
 
   // Load existing extraction if extractionId is provided in URL
   useEffect(() => {
@@ -73,19 +130,26 @@ export default function DataExtraction() {
       
       setExtraction(results);
       
-      // Run QA validation
-      const singleArmQA = validateSingleArmData(results.singleArmData);
-      const comparativeQA = validateComparativeData(results.comparativeData);
-      setQaReport({ singleArm: singleArmQA, comparative: comparativeQA });
-      
-      setLoading(false); // Force state update
-      
-      toast({
-        title: 'Extraction loaded',
-        description: `Status: ${results.status} - ${results.singleArmData?.length || 0} single-arm + ${results.comparativeData?.length || 0} comparative outcomes`,
-        status: 'success',
-        duration: 5000,
-      });
+      // If still processing, start polling
+      if (results.status === 'processing') {
+        console.log('🔄 Extraction still processing, starting poll loop...');
+        setLoading(false);
+        startPolling(extractionId);
+      } else {
+        // Run QA validation for completed extractions
+        const singleArmQA = validateSingleArmData(results.singleArmData);
+        const comparativeQA = validateComparativeData(results.comparativeData);
+        setQaReport({ singleArm: singleArmQA, comparative: comparativeQA });
+        
+        setLoading(false);
+        
+        toast({
+          title: 'Extraction loaded',
+          description: `Status: ${results.status} - ${results.singleArmData?.length || 0} single-arm + ${results.comparativeData?.length || 0} comparative outcomes`,
+          status: 'success',
+          duration: 5000,
+        });
+      }
     } catch (error: any) {
       console.error('Error loading extraction:', error);
       console.error('Error response:', error.response?.data);
@@ -138,15 +202,12 @@ export default function DataExtraction() {
 
     try {
       setUploading(true);
-      setUploadProgress(30);
 
       console.log('Uploading to:', `/api/projects/${projectId}/studies/${studyId}/extract-ai`);
       
       const { extractionId } = await uploadAndExtract(projectId!, studyId!, formData);
       
       console.log('Upload successful, extractionId:', extractionId);
-      
-      setUploadProgress(50);
       setUploading(false);
       setProcessing(true);
 
@@ -159,16 +220,19 @@ export default function DataExtraction() {
 
       // Poll for results (with timeout)
       let attempts = 0;
-      const maxAttempts = 30; // 30 seconds max
+      const maxAttempts = 120; // 120 seconds max for large documents
       
       const pollResults = async (): Promise<void> => {
         try {
-          console.log(`Polling for results (attempt ${attempts + 1}/${maxAttempts})...`);
+          console.log(`🔍 Polling for results (attempt ${attempts + 1}/${maxAttempts})...`);
           const results = await getExtractionResults(projectId!, extractionId);
           
-          console.log('Extraction results:', results);
+          console.log('📊 Extraction status:', results.status);
+          console.log('📊 Single-arm count:', results.singleArmData?.length || 0);
+          console.log('📊 Comparative count:', results.comparativeData?.length || 0);
           
           if (results.status === 'completed') {
+            console.log('✅ Extraction completed! Setting state...');
             setExtraction(results);
             setProcessing(false);
             
@@ -178,11 +242,14 @@ export default function DataExtraction() {
             setQaReport({ singleArm: singleArmQA, comparative: comparativeQA });
             
             toast({
-              title: 'Extraction complete',
+              title: 'Extraction complete!',
               description: `Found ${results.singleArmData.length} single-arm and ${results.comparativeData.length} comparative outcomes`,
               status: 'success',
               duration: 5000,
             });
+            
+            console.log('✅ State updated - extraction:', extraction);
+            console.log('✅ Processing flag:', processing);
           } else if (results.status === 'error') {
             throw new Error('Extraction failed on server');
           } else {

@@ -106,7 +106,6 @@ export default function ProjectDetail() {
       
       console.log('✅ Metadata extracted:', result.metadata);
       setExtractedMetadata(result.metadata);
-      setTempFileData(result);
       setExtracting(false);
       
       toast({
@@ -169,7 +168,6 @@ export default function ProjectDetail() {
       
       setSelectedFile(null);
       setExtractedMetadata(null);
-      setTempFileData(null);
       setUploading(false);
       onClose();
       
@@ -192,7 +190,6 @@ export default function ProjectDetail() {
   const handleCloseModal = () => {
     setSelectedFile(null);
     setExtractedMetadata(null);
-    setTempFileData(null);
     setExtracting(false);
     onClose();
   };

@@ -199,20 +199,52 @@ export async function extractClinicalData(filePath, fileName, projectPICOTS = {}
       // Format tables for this chunk (tables that appear in this text range)
       let tableSection = '';
       if (tables.length > 0) {
-        tableSection = '\n\n**EXTRACTED TABLES (Structured Data):**\n\n';
+        tableSection = '\n\n**EXTRACTED TABLES - FOCUS ON OUTCOME/RESULTS TABLES, SKIP BASELINE/DEMOGRAPHICS:**\n\n';
         tables.forEach((table, idx) => {
-          tableSection += `Table ${idx + 1} (Page ${table.page}):\n`;
-          tableSection += `Headers: ${JSON.stringify(table.headers)}\n`;
-          tableSection += `Data:\n`;
-          table.rows.forEach((row, rowIdx) => {
-            tableSection += `  Row ${rowIdx + 1}: ${JSON.stringify(row)}\n`;
+          tableSection += `=== TABLE ${idx + 1} (Page ${table.page}) ===\n`;
+          
+          // Format as proper table with columns aligned
+          if (table.headers && table.headers.length > 0) {
+            tableSection += `| ${table.headers.join(' | ')} |\n`;
+            tableSection += `|${table.headers.map(() => '---').join('|')}|\n`;
+          }
+          
+          table.rows.forEach((row) => {
+            if (Array.isArray(row)) {
+              tableSection += `| ${row.join(' | ')} |\n`;
+            } else {
+              tableSection += `| ${JSON.stringify(row)} |\n`;
+            }
           });
           tableSection += '\n';
         });
+        
+        tableSection += '\n**EXTRACTION PRIORITY - LOOK FOR THESE IN OUTCOME TABLES:**\n';
+        tableSection += '- Death/mortality counts and rates (all-cause, cardiovascular)\n';
+        tableSection += '- Hospitalization events (CV-related, all-cause)\n';
+        tableSection += '- Disease progression or worsening events\n';
+        tableSection += '- Changes from baseline in symptom scores (any score reported)\n';
+        tableSection += '- Changes from baseline in biomarkers (any lab values reported)\n';
+        tableSection += '- Adverse events (any AE, serious AE, treatment discontinuations)\n';
+        tableSection += '- Hazard ratios (HR), odds ratios (OR), risk ratios (RR) with 95% CI\n';
+        tableSection += '- P-values for treatment comparisons\n';
+        tableSection += '- Extract data from ALL timepoints found in tables (do not limit to specific timepoints)\n';
+        tableSection += '\n**SKIP baseline demographics (age, sex, race) unless they are outcome measures.**\n\n';
       }
       
-      const prompt = `You are a clinical trial data extraction expert for Network Meta-Analysis (NMA). Extract arm-level and contrast-level outcome data from this clinical trial document section.
+      const prompt = `You are a clinical trial data extraction expert for Network Meta-Analysis (NMA). Extract CLINICAL OUTCOME DATA (efficacy and safety endpoints), NOT baseline demographics.
+
 ${picotsContext}
+
+**CRITICAL INSTRUCTIONS:**
+1. **SKIP BASELINE CHARACTERISTICS**: Do NOT extract age, sex, weight, height, or other Table 1 demographics
+2. **EXTRACT BOTH SINGLE-ARM AND COMPARATIVE DATA**: You MUST extract BOTH types - single-arm data (outcomes by treatment arm) AND comparative data (direct comparisons between arms). Both are equally important for network meta-analysis.
+3. **EXTRACT ALL CLINICAL OUTCOMES**: Extract EVERY primary endpoint, ALL secondary endpoints, ALL safety outcomes, ALL adverse events reported in results sections. A typical RCT should yield 20-50+ records. Do NOT extract just 3-5 outcomes - that is insufficient.
+4. **EXTRACT ALL TIMEPOINTS**: Include every timepoint reported (weeks, months, years - whatever is in the document). If outcomes reported at Month 6, 12, 18, 24, 30 - extract ALL of them.
+5. **PUT NUMBERS IN CORRECT FIELDS**: Do NOT put statistical results in notes - extract them into te, seTE, mean, sd, event fields
+6. **CALCULATE TREATMENT EFFECTS**: When HR/OR/RR with 95% CI are reported, ALWAYS calculate te=log(estimate) and seTE=(log(upper)-log(lower))/3.92
+7. **CALCULATE STANDARD ERRORS**: When 95% CI reported for mean difference, ALWAYS calculate seTE=(upper-lower)/(2*1.96)
+8. **COMPREHENSIVE EXTRACTION**: Scan entire document section thoroughly. Look at EVERY table and EVERY figure caption for outcome data.
 
 **CRITICAL: Return ONLY valid JSON, no other text.**
 
@@ -222,8 +254,8 @@ Extract data in this EXACT format with ALL 23 single-arm fields and ALL 22 compa
     {
       "study": "Study name from document",
       "treatment": "Treatment arm name",
-      "measureName": "Outcome measure name (e.g., 'all-cause mortality', '6-minute walk test')",
-      "timePoint": "Time point (e.g., '12 weeks', '30 months')",
+      "measureName": "Outcome measure name (e.g., 'all-cause mortality', '6-minute walk test', 'KCCQ-OS score')",
+      "timePoint": "Time point as stated in document (e.g., '12 weeks', 'Week 24', '30 months', 'Month 18', 'Year 2', 'End of study')",
       "n": <sample size as number>,
       "event": <number of events if dichotomous, or null>,
       "time": <follow-up time if time-to-event, or null>,
@@ -257,10 +289,10 @@ Extract data in this EXACT format with ALL 23 single-arm fields and ALL 22 compa
       "timePoint": "Time point",
       "n1": <sample size treatment 1>,
       "n2": <sample size treatment 2>,
-      "te": <treatment effect in log scale for ratios>,
-      "seTE": <standard error of treatment effect>,
-      "notes": "Additional notes (e.g., HR: 0.69, 95% CI: 0.49-0.98)",
-      "calculationNotes": "Calculation details (e.g., TE converted to log scale)",
+      "te": <treatment effect - log(HR/OR/RR) for ratios, raw difference for continuous>,
+      "seTE": <standard error calculated from 95% CI>,
+      "notes": "Source data: HR 0.69 (95% CI 0.49-0.98), p=0.04",
+      "calculationNotes": "te=log(0.69)=-0.371, seTE=(log(0.98)-log(0.49))/3.92=0.172",
       "condition": "${projectPICOTS.conditionName || 'Extract from document'}",
       "age": "Age criteria",
       "severity": "Disease severity",
@@ -283,21 +315,141 @@ Extract data in this EXACT format with ALL 23 single-arm fields and ALL 22 compa
   "warnings": ["Any warnings or issues", "PICOTS mismatches if applicable"]
 }
 
-**IMPORTANT EXTRACTION RULES:**
-1. **Extract EVERYTHING by default**: All primary outcomes, secondary outcomes, AEs, SAEs
-2. **Multiple outcomes = multiple rows**: One row per outcome per treatment per timepoint
-3. **All treatment arms**: Include placebo, active comparators, different doses
-4. **Page/table tracking**: Critical for verification - always include source location
-5. **Effect measures**: For comparativeData, calculate treatment effects when possible
-6. For dichotomous outcomes: Extract n (sample size) and event (number of events)
-7. For continuous outcomes: Extract n, mean, and sd
-8. For comparative data: Calculate log(HR), log(RR), or log(OR) for te field
-9. Calculate standard error (seTE) from 95% CI: seTE ≈ (log(upper) - log(lower)) / 3.92
-10. Extract ONLY data explicitly stated in tables/text
-11. Include page and table references for every extraction
-12. If data is unclear or missing, set to null and add a warning
-13. Extract all outcome measures found in the document
-14. **PRIORITIZE TABLE DATA**: If structured tables are provided below, extract numerical data from them first
+**CRITICAL EXTRACTION RULES - COMPREHENSIVE OUTCOME EXTRACTION:**
+
+**WHEN TO USE SINGLE-ARM vs COMPARATIVE DATA:**
+- **Use SINGLE-ARM** when tables/text report outcomes separately by treatment arm (e.g., "Acoramidis: 12 deaths, Placebo: 18 deaths")
+- **Use COMPARATIVE** when tables/text report direct comparisons (e.g., "HR 0.69, 95% CI 0.49-0.98")
+- **EXTRACT BOTH** when paper reports both formats - don't choose one over the other!
+- Example: A table showing "Deaths: Acoramidis 12/409, Placebo 18/202" → Extract as single-arm data (2 records)
+- Example: Text says "Acoramidis reduced mortality vs placebo (HR 0.69, 95% CI 0.49-0.98)" → Extract as comparative data (1 record)
+- **BEST PRACTICE**: If you see individual arm results in tables, extract them as single-arm. If you also see HR/RR/OR, extract that as comparative. Both are needed!
+
+1. **WHAT TO EXTRACT - BE EXHAUSTIVE:**
+   - **Primary endpoints**: ALL primary outcomes listed in methods/results (e.g., mortality, composite endpoints, win ratios)
+   - **Secondary endpoints**: ALL secondary outcomes - typical RCTs have 10-20 secondary endpoints, extract ALL of them:
+     * Cardiovascular hospitalizations (frequency, cumulative incidence)
+     * All-cause hospitalizations
+     * 6-minute walk distance changes
+     * NT-proBNP or other biomarker changes
+     * Quality of life scores (KCCQ-OS, KCCQ-CSS, EQ-5D)
+     * Functional class changes (NYHA)
+     * Disease progression markers
+   - **Safety outcomes**: Extract EVERY adverse event category reported:
+     * Any treatment-emergent adverse events (TEAEs)
+     * Serious adverse events (SAEs)
+     * Adverse events leading to discontinuation
+     * Specific AE categories (infections, cardiac events, renal events, hepatic events)
+     * Deaths during treatment
+   - **Composite endpoints**: Extract composite AND all individual components separately
+   - **Subgroup analyses**: If outcomes reported by genotype, age group, etc., extract all subgroups
+   - **Subgroup analyses**: If multiple subgroups reported (e.g., by genotype), extract all
+
+2. **WHAT TO SKIP:**
+   - Baseline demographics (age, sex, race, BMI) - NEVER extract these
+   - Baseline lab values (unless it's "change from baseline")
+   - Enrollment/screening numbers
+
+3. **EXTRACT EVERY TIMEPOINT**: If paper reports outcomes at Week 12, Month 6, Month 12, Month 30 - extract ALL of them, create separate records for each
+
+4. **REQUIRED FIELDS - NEVER NULL**:
+   - **Single-arm data**: study, treatment, measureName, timePoint, n are REQUIRED
+   - **Comparative data**: study, treatment1, treatment2, measureName, timePoint, n1, n2 are REQUIRED
+   - CRITICAL: n1 and n2 MUST be extracted for every comparative data record - look in the text/tables for "n=XXX" or sample size information
+   - If sample size truly not reported in document, set n1/n2 to the total randomized numbers and explain in notes: "Sample size for this outcome not reported, using total randomized"
+   - If truly missing and cannot infer, explain in notes
+
+5. **DICHOTOMOUS OUTCOMES - Single Arm**:
+   - Format: "Deaths: Acoramidis 12/409, Placebo 18/202" or "Acoramidis: 12 events (2.9%), Placebo: 18 events (8.9%)"
+   - Extract 2 single-arm records:
+     * Record 1: study=..., treatment="Acoramidis", measureName="Death", timePoint=..., n=409, event=12
+     * Record 2: study=..., treatment="Placebo", measureName="Death", timePoint=..., n=202, event=18
+   - DO NOT put this in notes - put in n and event fields!
+   - CRITICAL: When you see "X events in treatment A, Y events in treatment B" this is SINGLE-ARM data, not comparative!
+
+6. **CONTINUOUS OUTCOMES - Single Arm**:
+   - Format: "Change in 6MWD: Acoramidis -30.5±95.2m (n=409), Placebo -48.3±102.1m (n=202)"
+   - Extract 2 single-arm records:
+     * Record 1: treatment="Acoramidis", n=409, mean=-30.5, sd=95.2
+     * Record 2: treatment="Placebo", n=202, mean=-48.3, sd=102.1
+   - If only SE given: Calculate sd = SE × √n, document in calculationNotes
+   - If only 95% CI given: Calculate SE = (upper - lower)/(2×1.96), then sd = SE × √n
+   - If data only shown graphically (no numerical values in text/tables): Leave mean/sd as null, explain in notes: "Data shown graphically only, numerical values not reported in text"
+   - DO NOT put this in notes - put in mean/sd fields!
+
+6a. **LOOK FOR SUPPLEMENTARY TABLES**: Many papers report detailed numerical data in supplementary appendices or online-only tables. Check tables in the document for exact numbers even if main text only references figures.
+
+7. **HAZARD RATIOS (HR) - Comparative**:
+   - Format: "HR 0.69 (95% CI 0.49-0.98)" or "HR=0.73, 95% CI: 0.56 to 0.96, p=0.02"
+   - STEP 1: Find sample sizes n1 and n2 (look in table, text, or methods - e.g., "Acoramidis n=409, Placebo n=202")
+   - STEP 2: te = ln(HR) = ln(0.69) = -0.371
+   - STEP 3: seTE = (ln(upper) - ln(lower)) / 3.92 = (ln(0.98) - ln(0.49)) / 3.92 = 0.172
+   - STEP 4: Extract as comparative data: treatment1="Acoramidis", treatment2="Placebo", n1=409, n2=202, te=-0.371, seTE=0.172
+   - STEP 5: Document in notes: "HR 0.69 (95% CI 0.49-0.98)"
+   - STEP 6: Document in calculationNotes: "te=ln(HR), seTE calculated from 95% CI using formula (ln(upper)-ln(lower))/3.92"
+   - CRITICAL: DO NOT leave n1/n2 null - always find the sample sizes!
+
+8. **ODDS RATIOS (OR) / RISK RATIOS (RR) - Comparative**:
+   - Same as HR: Find n1/n2, calculate te = ln(OR), seTE = (ln(upper) - ln(lower)) / 3.92
+   - Document calculation in calculationNotes
+
+9. **MEAN DIFFERENCES - Comparative**:
+   - Format: "Mean difference: -12.3 (95% CI: -18.7 to -5.9)" or "Difference: 3.4, 95% CI: 1.2 to 5.6"
+   - STEP 1: Find sample sizes n1 and n2 from table/text
+   - STEP 2: te = raw difference = -12.3
+   - STEP 3: seTE = (upper - lower) / (2 × 1.96) = (-5.9 - (-18.7)) / 3.92 = 3.26
+   - STEP 4: Extract with n1, n2, te, seTE all populated
+   - STEP 5: Document in notes: "Mean difference -12.3 (95% CI -18.7 to -5.9)"
+   - STEP 4: Document in calculationNotes: "seTE calculated from 95% CI using (upper-lower)/(2×1.96)"
+   - DO NOT leave te/seTE null - CALCULATE THEM!
+
+10. **P-VALUES WITHOUT CIs**:
+   - If only p-value given (e.g., "HR 0.69, p=0.04") without CI:
+   - Extract te = ln(0.69)
+   - Leave seTE = null
+   - Document in calculationNotes: "seTE could not be calculated - no CI reported, only p-value"
+
+11. **WIN RATIOS**:
+   - Format: "Win ratio: 1.8 (95% CI: 1.4 to 2.2)" or "Win ratio 1.64 (95% CI 1.27-2.14)"
+   - STEP 1: Find sample sizes n1 and n2 (look nearby in text/table - often reported in same section)
+   - STEP 2: te = ln(1.8) = 0.5878
+   - STEP 3: seTE = (ln(2.2) - ln(1.4)) / 3.92 = 0.1012
+   - STEP 4: Extract as COMPARATIVE data with n1, n2, te, seTE all populated
+   - STEP 5: Document calculation in calculationNotes: "te=ln(1.8)=0.5878; seTE=(ln(2.2)-ln(1.4))/3.92=0.1012"
+   - STEP 6: notes field can include original text: "Win ratio 1.8 (95% CI 1.4-2.2), p<0.001"
+   - CRITICAL: Do NOT leave n1/n2 as null - search the document section for sample sizes!
+   - STEP 3: Extract as COMPARATIVE data with these calculated values in te/seTE fields
+   - STEP 4: Document calculation in calculationNotes: "te=ln(1.8)=0.5878; seTE=(ln(2.2)-ln(1.4))/3.92=0.1012"
+   - STEP 5: notes field can include original text: "Win ratio 1.8 (95% CI 1.4-2.2), p<0.001"
+   - CRITICAL: Do NOT leave te/seTE as null - ALWAYS calculate them when CI is provided!
+
+12. **COMPREHENSIVE EXTRACTION**:
+   - Read the ENTIRE document section carefully
+   - Check main results tables, supplementary tables, figures, and appendices
+   - Extract EVERY outcome reported - don't cherry-pick
+   - If a table has 15 rows of outcomes, extract all 15
+
+13. **SOURCE DOCUMENTATION**:
+   - page: Page number where data found
+   - table: Table/Figure number (e.g., "Table 2", "Figure 3", "Supplementary Table S4")
+   - ref: Filename (already provided)
+
+14. **CALCULATION TRANSPARENCY**:
+   - calculationNotes: REQUIRED when you perform ANY calculation (te from HR, seTE from CI, sd from SE)
+   - Example: "te=ln(0.69)=-0.371; seTE=(ln(0.98)-ln(0.49))/3.92=0.172"
+
+15. **NULL VALUES**:
+   - Only acceptable if data truly not in document
+   - MUST explain in notes/calculationNotes why null
+   - Example: "HR reported without confidence interval, cannot calculate seTE"
+
+**FINAL REMINDER - WHERE TO PUT THE NUMBERS:**
+- Win ratios, hazard ratios, odds ratios, risk ratios with CIs → Find n1/n2, calculate te and seTE, put ALL in proper fields (n1, n2, te, seTE)
+- Mean differences with CIs → Find n1/n2, calculate te and seTE, put ALL in proper fields (n1, n2, te, seTE)
+- Event counts by arm → Put in n and event fields (NOT in notes!)
+- Means and SDs by arm → Put in mean and sd fields (NOT in notes!)
+- CRITICAL: For comparative data, n1 and n2 are REQUIRED fields - search the document for sample sizes and extract them!
+- Notes field is for context (p-values, original text), not for the primary numerical data
 
 ${tableSection}
 
@@ -309,20 +461,20 @@ Extract all relevant clinical trial data from this section. Use the structured t
     console.log(`🔄 Sending chunk ${chunkIndex + 1}/${chunks.length} to GPT-4 (with ${tables.length} tables)...`);
     
     const completion = await client.chat.completions.create({
-      model: 'gpt-4-turbo-preview',
+      model: 'gpt-4o',
       messages: [
         {
           role: 'system',
-          content: 'You are a clinical trial data extraction expert. Extract structured data from this section and return ONLY valid JSON, no additional text or formatting.',
+          content: 'You are a clinical trial data extraction expert for Network Meta-Analysis. EXTRACT COMPREHENSIVELY - a typical RCT paper should yield 20-50+ outcome records (multiple endpoints × multiple timepoints × 2 arms). CRITICAL RULES: (1) Extract ALL clinical outcomes - primary endpoints, ALL secondary endpoints, ALL safety outcomes, ALL adverse events. Do NOT skip any. (2) Extract BOTH single-arm AND comparative data when available. (3) CALCULATE treatment effects: te=ln(HR/OR/RR), seTE=(ln(upper)-ln(lower))/3.92. (4) SAMPLE SIZES REQUIRED: n1/n2 MUST be extracted for comparative data. (5) Put numbers in CORRECT FIELDS: n1/n2/te/seTE for comparative, mean/sd for continuous, n/event for dichotomous. (6) Extract from ALL timepoints reported. (7) SKIP baseline demographics. Return ONLY valid JSON.',
         },
         {
           role: 'user',
           content: prompt,
         },
       ],
-      temperature: 0.1, // Low temperature for consistency
-      max_tokens: 4096, // GPT-4-turbo max output tokens
-      response_format: { type: 'json_object' }, // Force JSON response
+      temperature: 0.1,
+      max_tokens: 16384, // Dramatically increased to allow comprehensive extraction
+      response_format: { type: 'json_object' },
     });
 
       const responseText = completion.choices[0].message.content;

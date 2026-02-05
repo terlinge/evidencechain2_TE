@@ -1,6 +1,5 @@
 import { Box, Container, HStack, Heading, Button, Menu, MenuButton, MenuList, MenuItem, Avatar } from '@chakra-ui/react';
 import { useNavigate } from 'react-router-dom';
-import { ChevronDownIcon } from '@chakra-ui/icons';
 
 export default function Navbar() {
   const navigate = useNavigate();
